@@ -1,0 +1,181 @@
+#!/usr/bin/python
+# ------------------------------------------------------------- # 
+# checker - verify souce code conformance to coding style rules #
+# Author: Thyago Mota                                           #
+# Date: 09/27/14                                                #
+# ------------------------------------------------------------- #
+import cgi, os, subprocess, re, config
+from subprocess import call
+import cgitb
+
+# output common HTML header
+print('Content-Type: text/html\n')
+print('<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"\n')
+print('        "http://www.w3.org/TR/html4/loose.dtd">\n')
+print('<HTML>\n')
+print('    <HEAD>\n')
+print('        <TITLE>C++ Code Style Checker Tool</title>\n')
+print('        <STYLE>\n')
+print('            .body {font-family: times; font-size: 12}\n')
+print('            #code {border: 1px solid black; background: white; border-box; float: left; height: 650px; width: 650px; overflow-y: scroll; -moz-border-radius-topright: 5px; -moz-border-radius-topleft: 5px; -webkit-border-top-right-radius: 5px; -webkit-border-top-left-radius: 5px; padding: 0px; margin: 10px;}\n')
+print('            #code h2 {background: black; color: white; font-family: times; text-align: center; vertical-align: text-top;}\n')
+print('            #code p  {background: white; color: black; padding: 5px; font-family: monospace; text-align: left;}\n')
+print('        </STYLE>\n')
+print('    </HEAD>\n')
+print('\n')
+print('    </HEAD>\n')
+print('    <BODY>\n')
+print('    Go <A href="style">back</A> to the C++ Code Style Checker Tool!<BR/>\n')
+
+# enables more comprehensive debug messages
+cgitb.enable()
+
+# reads uploaded file
+form = cgi.FieldStorage()
+uploadedFile = form['file']
+if not uploadedFile.filename:
+	msg = 'Error while uploading file!\n'
+else:	
+	fileName = os.path.basename(uploadedFile.filename)
+	fileName = os.path.join(config.TEMP_FOLDER, fileName)
+	open(fileName, 'wb').write(uploadedFile.file.read() + '\n')
+	
+	# renames the file 
+	originalFileName = os.path.join(config.TEMP_FOLDER, config.ORIGINAL_FILE_NAME)
+	os.rename(fileName, originalFileName)
+
+	# verifies if the file is C/C++ source code
+	outputFileName = os.path.join(config.TEMP_FOLDER, 'file.output')
+	cmd = 'file -b ' + originalFileName + ' > ' + outputFileName 
+	try:
+		call(cmd, shell = True)
+		fileType = open(outputFileName, 'rt').readline().replace('\n', '')
+		if fileType not in config.ACCEPTED_FILE_TYPES:
+			msg = 'File uploaded is NOT accepted: ' + fileType
+	except:
+		msg = 'Couldn\'t determine the type of file that was uploaded!'
+
+# proceeds evaluation if file is good
+try:
+	print(msg)
+except:
+	# running dos2unix
+	cmd = 'dos2unix ' + originalFileName	
+	try:
+		call(cmd, shell = True)
+	except:
+		pass
+
+	try:
+		# running astyle
+		formattedFileName = os.path.join(config.TEMP_FOLDER, config.FORMATTED_FILE_NAME)
+		cmd = './astyle --style=allman --pad-oper --unpad-paren < ' + originalFileName  + ' > ' + formattedFileName
+		status = call(cmd, shell = True)
+		if status != 0:
+			raise Exception('Error running astyle!')	
+
+		# removing last line of formatted file
+		cmd = 'sed -i \'$ d\' '	+ formattedFileName
+		call(cmd, shell = True)
+	
+		# running diff
+		outputFileName = os.path.join(config.TEMP_FOLDER, 'diff.output')
+		cmd = 'diff ' + originalFileName + ' ' + formattedFileName + ' > ' + outputFileName
+		call(cmd, shell = True)
+		
+		# showing the differences
+		original = open(originalFileName).read().splitlines()
+		for i in range(0, len(original)):
+			original[i] = original[i].replace('<', '&lt;')
+			original[i] = original[i].replace('>', '&gt;')
+			original[i] = original[i].replace(' ', '&nbsp;')
+			original[i] = original[i].replace('\t', '<IMG src="../pics/tab.png" height="5%" width="5%"/>')
+		formatted = open(formattedFileName).read().splitlines()	
+		for i in range(0, len(formatted)):
+			formatted[i] = formatted[i].replace('<', '&lt;')
+			formatted[i] = formatted[i].replace('>', '&gt;')
+			formatted[i] = formatted[i].replace(' ', '&nbsp;')
+		diff = open(outputFileName)
+		skip = 0
+		currentColor = 0
+		for line in diff:
+			if skip > 0:
+				skip -= 1
+				continue
+			line = line.replace('\n', '')
+			#print(line + '<BR/>')
+			op = re.findall('[acd]', line)[0]
+
+			# left side of the operation
+			match = re.findall('[0-9]*,[0-9]*[acd]', line)
+			if match:
+				value = match[0][0:len(match[0])-1]
+				leftLow  = int(value.split(',')[0])
+				leftHigh = int(value.split(',')[1])				
+			else:
+				match = re.findall('[0-9]*[acd]', line)
+				value = match[0][0:len(match[0])-1]
+				leftLow = leftHigh = int(value)
+			#print('leftLow: ' + str(leftLow) + '; leftHigh: ' + str(leftHigh) + '<BR/>')
+
+			# right side of the operation
+			match = re.findall('[acd][0-9]*,[0-9]*', line)
+			if match:
+				value = match[0][1:len(match[0])]
+				rightLow  = int(value.split(',')[0])
+				rightHigh = int(value.split(',')[1])
+			else:
+				match = re.findall('[acd][0-9]*', line)
+				value = match[0][1:len(match[0])]
+				rightLow = rightHigh = int(value)
+			#print('rightLow: ' + str(rightLow) + '; rightHigh: ' + str(rightHigh) + '<BR/>')
+
+			# making the changes in the coloring
+			if op == 'c' or op == 'd':
+				for i in range(leftLow, leftHigh + 1):
+					original[i - 1] = '<SPAN style="background: ' + config.COLORS[currentColor] + '">' + original[i - 1] + '</SPAN>'
+			if op == 'c' or op == 'a':
+				for i in range(rightLow, rightHigh + 1):
+					formatted[i - 1] = '<SPAN style="background: ' + config.COLORS[currentColor] + '">' + formatted[i - 1] + '</SPAN>'
+
+			# counting the number of lines to skip
+			if op == 'c':
+				skip = leftHigh - leftLow + rightHigh - rightLow + 3
+			elif op == 'a':
+				skip = rightHigh - rightLow + 1 
+			else:
+				skip = leftHigh - leftLow + 1
+			#print('skip: ' + str(skip) + '<BR/><BR/>')
+			currentColor += 1
+			if currentColor == len(config.COLORS):
+				currentColor = 0	
+
+		# printing HTML
+		print('<DIV id="code">\n')
+		print('<H2>ORIGINAL</H2>\n')
+		print('<P>')
+		count = 1
+		total = len(original)
+		zeros = len(str(total))
+		for line in original:
+			print(str(count).zfill(zeros) + '.&nbsp;' + line + '<BR/>\n')
+			count += 1
+		print('</P>\n')
+		print('</DIV>\n')
+		print('<DIV id="code">\n')
+		print('<H2>FORMATTED</H2>\n')
+		print('<P>')
+		count = 1
+		total = len(formatted)
+		zeros = len(str(total))
+		for line in formatted:
+			print(str(count).zfill(zeros) + '.&nbsp;' + line + '<BR/>\n')
+			count += 1
+		print('</P>\n')
+		print('</DIV>\n')
+	except Exception, ex:
+		print(ex)	
+
+# finishes HTML
+print('    </BODY>\n')
+print('</HTML>\n')
